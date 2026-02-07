@@ -12,6 +12,8 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  
+  console.log("[LoginScreen] Rendering...");
 
   const handleLogin = async () => {
     if (!email || !password) {

@@ -26,28 +26,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Timeout to prevent infinite loading - shorter for mobile
+    console.log("[AuthContext] Initializing...");
+
+    // Timeout to prevent infinite loading - very short for mobile
     const timeout = setTimeout(() => {
       if (mounted && loading) {
-        console.warn("Auth loading timeout - proceeding anyway");
+        console.warn("[AuthContext] Loading timeout - proceeding anyway");
         setLoading(false);
       }
-    }, 2000); // 2 second timeout for faster startup
+    }, 1500); // 1.5 second timeout
 
     // Get initial session
+    console.log("[AuthContext] Calling getSession...");
     supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (!mounted) return;
+      if (!mounted) {
+        console.log("[AuthContext] Component unmounted, ignoring session");
+        return;
+      }
       clearTimeout(timeout);
       if (error) {
-        console.error("Error getting session:", error);
+        console.error("[AuthContext] Error getting session:", error);
         setLoading(false);
         return;
       }
+      console.log("[AuthContext] Session retrieved:", session ? "Logged in" : "Not logged in");
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
     }).catch((error) => {
-      console.error("Error in getSession:", error);
+      console.error("[AuthContext] Exception in getSession:", error);
       clearTimeout(timeout);
       if (mounted) {
         setLoading(false);
@@ -59,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
+      console.log("[AuthContext] Auth state changed:", _event, session ? "Logged in" : "Not logged in");
       clearTimeout(timeout);
       setSession(session);
       setUser(session?.user ?? null);
@@ -66,6 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => {
+      console.log("[AuthContext] Cleaning up...");
       mounted = false;
       clearTimeout(timeout);
       subscription.unsubscribe();
