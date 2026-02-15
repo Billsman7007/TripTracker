@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { View, Text, TextInput, StyleSheet, ScrollView, Pressable, Alert, Platform, Modal } from "react-native";
+import { View, Text, TextInput, StyleSheet, ScrollView, Pressable, Alert, Platform, Modal, ActivityIndicator, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabaseClient";
+import { geocodeAddress } from "../lib/mapbox";
 
-type Tab = "settings" | "trucks" | "locations" | "vendors";
+type Tab = "settings" | "trucks" | "locations" | "vendors" | "expense_types";
 
 export default function SetupScreen() {
   const insets = useSafeAreaInsets();
@@ -17,6 +18,7 @@ export default function SetupScreen() {
     { id: "trucks", label: "Assets", icon: "car-outline" },
     { id: "locations", label: "Locations", icon: "location-outline" },
     { id: "vendors", label: "Vendors", icon: "storefront-outline" },
+    { id: "expense_types", label: "Exp Codes", icon: "pricetag-outline" },
   ];
 
   return (
@@ -69,6 +71,7 @@ export default function SetupScreen() {
         {activeTab === "trucks" && <TrucksTab />}
         {activeTab === "locations" && <LocationsTab />}
         {activeTab === "vendors" && <VendorsTab />}
+        {activeTab === "expense_types" && <ExpenseTypesTab />}
       </ScrollView>
     </View>
   );
@@ -79,10 +82,18 @@ function SettingsTab() {
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState({
     driver_name: "",
+    billing_address1: "",
+    billing_address2: "",
+    billing_city: "",
+    billing_state: "",
+    billing_zip: "",
+    country_of_operation: "US",
     default_currency: "USD",
     default_fuel_unit: "gallons",
     rate_per_mile_loaded: "",
     rate_per_mile_empty: "",
+    trip_number_sequence: "100",
+    order_number_sequence: "1",
   });
 
   useEffect(() => {
@@ -93,7 +104,7 @@ function SettingsTab() {
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
-        console.error("Error getting user:", userError);
+        // No active session - user needs to sign in first
         setLoading(false);
         return;
       }
@@ -106,7 +117,7 @@ function SettingsTab() {
         .single();
 
       if (tenantError || !tenantUser) {
-        console.error("Error getting tenant:", tenantError);
+        // No tenant found for this user
         setLoading(false);
         return;
       }
@@ -126,10 +137,18 @@ function SettingsTab() {
       if (data) {
         setSettings({
           driver_name: data.driver_name || "",
+          billing_address1: data.billing_address1 || "",
+          billing_address2: data.billing_address2 || "",
+          billing_city: data.billing_city || "",
+          billing_state: data.billing_state || "",
+          billing_zip: data.billing_zip || "",
+          country_of_operation: data.country_of_operation || "US",
           default_currency: data.default_currency || "USD",
           default_fuel_unit: data.default_fuel_unit || "gallons",
           rate_per_mile_loaded: data.rate_per_mile_loaded?.toString() || "",
           rate_per_mile_empty: data.rate_per_mile_empty?.toString() || "",
+          trip_number_sequence: data.trip_number_sequence?.toString() || "100",
+          order_number_sequence: data.order_number_sequence?.toString() || "1",
         });
       }
     } catch (error) {
@@ -163,14 +182,25 @@ function SettingsTab() {
 
       const { error } = await supabase
         .from("settings")
-        .upsert({
-          tenant_id: tenantUser.tenant_id,
-          driver_name: settings.driver_name || null,
-          default_currency: settings.default_currency,
-          default_fuel_unit: settings.default_fuel_unit,
-          rate_per_mile_loaded: settings.rate_per_mile_loaded ? parseFloat(settings.rate_per_mile_loaded) : null,
-          rate_per_mile_empty: settings.rate_per_mile_empty ? parseFloat(settings.rate_per_mile_empty) : null,
-        });
+        .upsert(
+          {
+            tenant_id: tenantUser.tenant_id,
+            driver_name: settings.driver_name || null,
+            billing_address1: settings.billing_address1 || null,
+            billing_address2: settings.billing_address2 || null,
+            billing_city: settings.billing_city || null,
+            billing_state: settings.billing_state || null,
+            billing_zip: settings.billing_zip || null,
+            country_of_operation: settings.country_of_operation || "US",
+            default_currency: settings.default_currency,
+            default_fuel_unit: settings.default_fuel_unit,
+            rate_per_mile_loaded: settings.rate_per_mile_loaded ? parseFloat(settings.rate_per_mile_loaded) : null,
+            rate_per_mile_empty: settings.rate_per_mile_empty ? parseFloat(settings.rate_per_mile_empty) : null,
+            trip_number_sequence: parseInt(settings.trip_number_sequence, 10) || 100,
+            order_number_sequence: parseInt(settings.order_number_sequence, 10) || 1,
+          },
+          { onConflict: "tenant_id" }
+        );
 
       if (error) throw error;
       
@@ -203,6 +233,115 @@ function SettingsTab() {
           placeholder="Enter driver name"
         />
       </View>
+
+      <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Billing Address</Text>
+
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Address Line 1</Text>
+        <TextInput
+          style={styles.input}
+          value={settings.billing_address1}
+          onChangeText={(text) => setSettings({ ...settings, billing_address1: text })}
+          placeholder="Street address"
+        />
+      </View>
+
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Address Line 2</Text>
+        <TextInput
+          style={styles.input}
+          value={settings.billing_address2}
+          onChangeText={(text) => setSettings({ ...settings, billing_address2: text })}
+          placeholder="Suite, unit, etc. (optional)"
+        />
+      </View>
+
+      <View style={styles.formRow}>
+        <View style={[styles.formGroup, { flex: 2 }]}>
+          <Text style={styles.label}>City</Text>
+          <TextInput
+            style={styles.input}
+            value={settings.billing_city}
+            onChangeText={(text) => setSettings({ ...settings, billing_city: text })}
+            placeholder="City"
+          />
+        </View>
+        <View style={[styles.formGroup, { flex: 1 }]}>
+          <Text style={styles.label}>State/Prov</Text>
+          <TextInput
+            style={styles.input}
+            value={settings.billing_state}
+            onChangeText={(text) => setSettings({ ...settings, billing_state: text })}
+            placeholder="ST"
+            autoCapitalize="characters"
+          />
+        </View>
+        <View style={[styles.formGroup, { flex: 1 }]}>
+          <Text style={styles.label}>Zip/Postal</Text>
+          <TextInput
+            style={styles.input}
+            value={settings.billing_zip}
+            onChangeText={(text) => setSettings({ ...settings, billing_zip: text })}
+            placeholder="Zip"
+          />
+        </View>
+      </View>
+
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Country of Operation</Text>
+        <View style={styles.radioGroup}>
+          <Pressable
+            style={[
+              styles.radioButton,
+              settings.country_of_operation === "US" && styles.radioButtonActive,
+            ]}
+            onPress={() => setSettings({ ...settings, country_of_operation: "US" })}
+          >
+            <Text
+              style={[
+                styles.radioLabel,
+                settings.country_of_operation === "US" && styles.radioLabelActive,
+              ]}
+            >
+              United States
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.radioButton,
+              settings.country_of_operation === "CA" && styles.radioButtonActive,
+            ]}
+            onPress={() => setSettings({ ...settings, country_of_operation: "CA" })}
+          >
+            <Text
+              style={[
+                styles.radioLabel,
+                settings.country_of_operation === "CA" && styles.radioLabelActive,
+              ]}
+            >
+              Canada
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.radioButton,
+              settings.country_of_operation === "BOTH" && styles.radioButtonActive,
+            ]}
+            onPress={() => setSettings({ ...settings, country_of_operation: "BOTH" })}
+          >
+            <Text
+              style={[
+                styles.radioLabel,
+                settings.country_of_operation === "BOTH" && styles.radioLabelActive,
+              ]}
+            >
+              Both
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Defaults & Rates</Text>
 
       <View style={styles.formGroup}>
         <Text style={styles.label}>Default Currency</Text>
@@ -299,6 +438,31 @@ function SettingsTab() {
           onChangeText={(text) => setSettings({ ...settings, rate_per_mile_empty: text })}
           placeholder="0.00"
           keyboardType="decimal-pad"
+        />
+      </View>
+
+      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Sequences</Text>
+      <Text style={styles.sequenceHint}>
+        These numbers auto-increment when you create trips or orders. Set the starting value.
+      </Text>
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Trip Number (next trip will use this)</Text>
+        <TextInput
+          style={styles.input}
+          value={settings.trip_number_sequence}
+          onChangeText={(text) => setSettings({ ...settings, trip_number_sequence: text.replace(/\D/g, "") })}
+          placeholder="100"
+          keyboardType="number-pad"
+        />
+      </View>
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Order Number</Text>
+        <TextInput
+          style={styles.input}
+          value={settings.order_number_sequence}
+          onChangeText={(text) => setSettings({ ...settings, order_number_sequence: text.replace(/\D/g, "") })}
+          placeholder="1"
+          keyboardType="number-pad"
         />
       </View>
 
@@ -961,6 +1125,15 @@ function LocationsTab() {
       ) : (
         locations.map((location) => (
           <View key={location.id} style={styles.itemCard}>
+            {/* Geocode status dot */}
+            <View
+              style={[
+                styles.geoDot,
+                location.latitude && location.longitude
+                  ? styles.geoDotVerified
+                  : styles.geoDotMissing,
+              ]}
+            />
             <View style={styles.itemContent}>
               <Text style={styles.itemTitle}>{location.name}</Text>
               <Text style={styles.itemSubtitle}>
@@ -1010,6 +1183,55 @@ function LocationForm({ location, onSave, onCancel }: any) {
     is_frequent: location?.is_frequent || false,
   });
 
+  // Geocoding state
+  const [latitude, setLatitude] = useState<number | null>(location?.latitude || null);
+  const [longitude, setLongitude] = useState<number | null>(location?.longitude || null);
+  const [geocodeStatus, setGeocodeStatus] = useState<"idle" | "loading" | "verified" | "failed">(
+    location?.latitude && location?.longitude ? "verified" : "idle"
+  );
+  const [showMap, setShowMap] = useState(false);
+
+  const mapboxToken = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || "";
+
+  function buildAddressString() {
+    const parts = [
+      formData.address1,
+      formData.city,
+      formData.state,
+      formData.zip_code,
+    ].filter(Boolean);
+    return parts.join(", ");
+  }
+
+  async function handleVerifyAddress() {
+    const address = buildAddressString();
+    if (!address.trim()) {
+      Alert.alert("Missing Address", "Please enter an address, city, or zip code first.");
+      return;
+    }
+
+    setGeocodeStatus("loading");
+    const result = await geocodeAddress(address);
+
+    if (result) {
+      setLatitude(result.latitude);
+      setLongitude(result.longitude);
+      setGeocodeStatus("verified");
+    } else {
+      setLatitude(null);
+      setLongitude(null);
+      setGeocodeStatus("failed");
+    }
+  }
+
+  function handleSave() {
+    onSave({
+      ...formData,
+      latitude,
+      longitude,
+    });
+  }
+
   return (
     <ScrollView style={styles.tabContent}>
       <Text style={styles.sectionTitle}>{location ? "Edit Location" : "New Location"}</Text>
@@ -1029,7 +1251,10 @@ function LocationForm({ location, onSave, onCancel }: any) {
         <TextInput
           style={styles.input}
           value={formData.address1}
-          onChangeText={(text) => setFormData({ ...formData, address1: text })}
+          onChangeText={(text) => {
+            setFormData({ ...formData, address1: text });
+            if (geocodeStatus === "verified" || geocodeStatus === "failed") setGeocodeStatus("idle");
+          }}
           placeholder="Street address"
         />
       </View>
@@ -1050,7 +1275,10 @@ function LocationForm({ location, onSave, onCancel }: any) {
           <TextInput
             style={styles.input}
             value={formData.city}
-            onChangeText={(text) => setFormData({ ...formData, city: text })}
+            onChangeText={(text) => {
+              setFormData({ ...formData, city: text });
+              if (geocodeStatus === "verified" || geocodeStatus === "failed") setGeocodeStatus("idle");
+            }}
             placeholder="City"
           />
         </View>
@@ -1059,7 +1287,10 @@ function LocationForm({ location, onSave, onCancel }: any) {
           <TextInput
             style={styles.input}
             value={formData.state}
-            onChangeText={(text) => setFormData({ ...formData, state: text })}
+            onChangeText={(text) => {
+              setFormData({ ...formData, state: text });
+              if (geocodeStatus === "verified" || geocodeStatus === "failed") setGeocodeStatus("idle");
+            }}
             placeholder="IL"
             maxLength={2}
             autoCapitalize="characters"
@@ -1072,10 +1303,81 @@ function LocationForm({ location, onSave, onCancel }: any) {
         <TextInput
           style={styles.input}
           value={formData.zip_code}
-          onChangeText={(text) => setFormData({ ...formData, zip_code: text })}
+          onChangeText={(text) => {
+            setFormData({ ...formData, zip_code: text });
+            if (geocodeStatus === "verified" || geocodeStatus === "failed") setGeocodeStatus("idle");
+          }}
           placeholder="60601"
           keyboardType="numeric"
         />
+      </View>
+
+      {/* Verify Address Button + Status */}
+      <View style={styles.formGroup}>
+        <Pressable
+          onPress={handleVerifyAddress}
+          disabled={geocodeStatus === "loading"}
+          style={[
+            styles.verifyBtn,
+            geocodeStatus === "verified" && styles.verifyBtnVerified,
+            geocodeStatus === "failed" && styles.verifyBtnFailed,
+          ]}
+        >
+          {geocodeStatus === "loading" ? (
+            <ActivityIndicator size="small" color="#6b7280" />
+          ) : geocodeStatus === "verified" ? (
+            <Ionicons name="checkmark-circle" size={14} color="#16a34a" />
+          ) : geocodeStatus === "failed" ? (
+            <Ionicons name="close-circle" size={14} color="#dc2626" />
+          ) : (
+            <Ionicons name="location" size={14} color="#2563eb" />
+          )}
+          <Text
+            style={[
+              styles.verifyBtnText,
+              geocodeStatus === "verified" && { color: "#16a34a" },
+              geocodeStatus === "failed" && { color: "#dc2626" },
+            ]}
+          >
+            {geocodeStatus === "loading"
+              ? "Verifying..."
+              : geocodeStatus === "verified"
+              ? "Address Verified"
+              : geocodeStatus === "failed"
+              ? "Not Found — Tap to Retry"
+              : "Verify Address"}
+          </Text>
+        </Pressable>
+        {geocodeStatus === "verified" && latitude && longitude && (
+          <View style={styles.coordRow}>
+            <Text style={styles.coordText}>
+              {latitude.toFixed(5)}, {longitude.toFixed(5)}
+            </Text>
+            <Pressable onPress={() => setShowMap(!showMap)} hitSlop={6}>
+              <Ionicons
+                name={showMap ? "map" : "map-outline"}
+                size={14}
+                color={showMap ? "#2563eb" : "#9ca3af"}
+              />
+            </Pressable>
+          </View>
+        )}
+        {geocodeStatus === "verified" && showMap && latitude && longitude && mapboxToken && (
+          <View style={styles.mapPreview}>
+            <Image
+              source={{
+                uri: `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/pin-s+dc2626(${longitude},${latitude})/${longitude},${latitude},14,0/280x160@2x?access_token=${mapboxToken}`,
+              }}
+              style={styles.mapImage}
+              resizeMode="cover"
+            />
+          </View>
+        )}
+        {geocodeStatus === "failed" && (
+          <Text style={styles.coordTextWarn}>
+            Address could not be geocoded. You can still save.
+          </Text>
+        )}
       </View>
 
       <View style={styles.formGroup}>
@@ -1130,7 +1432,7 @@ function LocationForm({ location, onSave, onCancel }: any) {
         </Pressable>
         <Pressable
           style={[styles.button, styles.buttonPrimary]}
-          onPress={() => onSave(formData)}
+          onPress={handleSave}
         >
           <Text style={styles.buttonPrimaryText}>Save</Text>
         </Pressable>
@@ -1540,6 +1842,286 @@ function VendorForm({ vendor, onSave, onCancel }: any) {
   );
 }
 
+// ── Expense Types Tab ──────────────────────────────────────
+function ExpenseTypesTab() {
+  const [expenseTypes, setExpenseTypes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<any>(null);
+  const [showForm, setShowForm] = useState(false);
+
+  useEffect(() => {
+    loadExpenseTypes();
+  }, []);
+
+  async function loadExpenseTypes() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: tenantUser } = await supabase
+        .from("tenant_users")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .single();
+
+      if (!tenantUser) return;
+
+      const { data, error } = await supabase
+        .from("expense_types")
+        .select("*")
+        .eq("tenant_id", tenantUser.tenant_id)
+        .order("sort_order", { ascending: true })
+        .order("code", { ascending: true });
+
+      if (error) throw error;
+      setExpenseTypes(data || []);
+    } catch (error) {
+      console.error("Error loading expense types:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveExpenseType(formData: any) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: tenantUser } = await supabase
+        .from("tenant_users")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .single();
+
+      if (!tenantUser) return;
+
+      const payload = {
+        code: formData.code?.trim() || null,
+        name: formData.name?.trim() || "",
+        description: formData.description?.trim() || null,
+        export_code: formData.export_code?.trim() || null,
+        sort_order: parseInt(formData.sort_order) || 0,
+      };
+
+      if (!payload.name) {
+        Alert.alert("Error", "Name is required.");
+        return;
+      }
+
+      if (editing) {
+        const { error } = await supabase
+          .from("expense_types")
+          .update(payload)
+          .eq("id", editing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("expense_types")
+          .insert({
+            ...payload,
+            tenant_id: tenantUser.tenant_id,
+          });
+        if (error) throw error;
+      }
+
+      Alert.alert("Success", "Expense type saved!");
+      setShowForm(false);
+      setEditing(null);
+      loadExpenseTypes();
+    } catch (error: any) {
+      Alert.alert("Error", error.message);
+    }
+  }
+
+  async function deleteExpenseType(id: string) {
+    Alert.alert(
+      "Delete Expense Type",
+      "Are you sure? This may affect expenses and vendors using this code.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const { error } = await supabase.from("expense_types").delete().eq("id", id);
+            if (error) {
+              Alert.alert("Error", error.message);
+            } else {
+              loadExpenseTypes();
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Loading expense types...</Text>
+      </View>
+    );
+  }
+
+  if (showForm) {
+    return (
+      <ExpenseTypeForm
+        expenseType={editing}
+        onSave={saveExpenseType}
+        onCancel={() => {
+          setShowForm(false);
+          setEditing(null);
+        }}
+      />
+    );
+  }
+
+  return (
+    <View>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Expense Types</Text>
+        <Pressable
+          style={styles.addButton}
+          onPress={() => {
+            setEditing(null);
+            setShowForm(true);
+          }}
+        >
+          <Ionicons name="add-circle" size={20} color="#2563eb" />
+          <Text style={styles.addButtonText}>Add</Text>
+        </Pressable>
+      </View>
+
+      {expenseTypes.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="pricetag-outline" size={36} color="#d1d5db" />
+          <Text style={styles.emptyText}>No expense types yet</Text>
+          <Text style={styles.emptySubtext}>Add codes for categorizing expenses</Text>
+        </View>
+      ) : (
+        expenseTypes.map((et) => (
+          <Pressable
+            key={et.id}
+            style={styles.listItem}
+            onPress={() => {
+              setEditing(et);
+              setShowForm(true);
+            }}
+          >
+            <View style={styles.itemHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                {et.code && (
+                  <View style={[styles.badge, { backgroundColor: "#f0fdf4" }]}>
+                    <Text style={[styles.badgeText, { color: "#16a34a" }]}>{et.code}</Text>
+                  </View>
+                )}
+                <Text style={styles.itemName}>{et.name}</Text>
+              </View>
+              {et.description && (
+                <Text style={styles.itemSubtext}>{et.description}</Text>
+              )}
+              {et.export_code && (
+                <View style={styles.badgeRow}>
+                  <View style={[styles.badge, styles.badgeGray]}>
+                    <Text style={styles.badgeTextGray}>GL: {et.export_code}</Text>
+                  </View>
+                </View>
+              )}
+            </View>
+            <Pressable
+              onPress={() => deleteExpenseType(et.id)}
+              style={styles.deleteButton}
+              hitSlop={8}
+            >
+              <Ionicons name="trash-outline" size={16} color="#dc2626" />
+            </Pressable>
+          </Pressable>
+        ))
+      )}
+    </View>
+  );
+}
+
+function ExpenseTypeForm({ expenseType, onSave, onCancel }: {
+  expenseType: any;
+  onSave: (data: any) => void;
+  onCancel: () => void;
+}) {
+  const [formData, setFormData] = useState({
+    code: expenseType?.code || "",
+    name: expenseType?.name || "",
+    description: expenseType?.description || "",
+    export_code: expenseType?.export_code || "",
+    sort_order: String(expenseType?.sort_order ?? 0),
+  });
+
+  return (
+    <ScrollView contentContainerStyle={styles.formContainer}>
+      <Text style={styles.formTitle}>
+        {expenseType ? "Edit Expense Type" : "New Expense Type"}
+      </Text>
+
+      <Text style={styles.inputLabel}>Code</Text>
+      <TextInput
+        style={styles.input}
+        value={formData.code}
+        onChangeText={(v) => setFormData({ ...formData, code: v })}
+        placeholder="e.g. FUEL, HOTEL, TOLL"
+        autoCapitalize="characters"
+      />
+
+      <Text style={styles.inputLabel}>Name *</Text>
+      <TextInput
+        style={styles.input}
+        value={formData.name}
+        onChangeText={(v) => setFormData({ ...formData, name: v })}
+        placeholder="e.g. Fuel Purchase"
+      />
+
+      <Text style={styles.inputLabel}>Description</Text>
+      <TextInput
+        style={[styles.input, styles.textArea]}
+        value={formData.description}
+        onChangeText={(v) => setFormData({ ...formData, description: v })}
+        placeholder="Optional description"
+        multiline
+      />
+
+      <Text style={styles.inputLabel}>Export / GL Code</Text>
+      <TextInput
+        style={styles.input}
+        value={formData.export_code}
+        onChangeText={(v) => setFormData({ ...formData, export_code: v })}
+        placeholder="e.g. 5100, 6200"
+      />
+
+      <Text style={styles.inputLabel}>Sort Order</Text>
+      <TextInput
+        style={styles.input}
+        value={formData.sort_order}
+        onChangeText={(v) => setFormData({ ...formData, sort_order: v })}
+        placeholder="0"
+        keyboardType="number-pad"
+      />
+
+      <View style={styles.formActions}>
+        <Pressable
+          style={[styles.button, styles.buttonSecondary]}
+          onPress={onCancel}
+        >
+          <Text style={styles.buttonSecondaryText}>Cancel</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.button, styles.buttonPrimary]}
+          onPress={() => onSave(formData)}
+        >
+          <Text style={styles.buttonPrimaryText}>Save</Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1617,6 +2199,12 @@ const styles = StyleSheet.create({
   },
   formGroup: {
     marginBottom: 12,
+  },
+  sequenceHint: {
+    fontSize: 12,
+    color: "#6b7280",
+    marginBottom: 12,
+    lineHeight: 16,
   },
   label: {
     fontSize: 11,
@@ -1901,5 +2489,70 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     marginTop: 12,
+  },
+  // Geocoding styles
+  verifyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    backgroundColor: "#ffffff",
+    alignSelf: "flex-start",
+  },
+  verifyBtnVerified: {
+    borderColor: "#bbf7d0",
+    backgroundColor: "#f0fdf4",
+  },
+  verifyBtnFailed: {
+    borderColor: "#fecaca",
+    backgroundColor: "#fef2f2",
+  },
+  verifyBtnText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#2563eb",
+  },
+  coordRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  coordText: {
+    fontSize: 10,
+    color: "#9ca3af",
+    fontStyle: "italic",
+  },
+  coordTextWarn: {
+    fontSize: 10,
+    color: "#dc2626",
+    marginTop: 4,
+  },
+  mapPreview: {
+    marginTop: 6,
+    borderRadius: 6,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  mapImage: {
+    width: "100%",
+    height: 140,
+  },
+  geoDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 8,
+  },
+  geoDotVerified: {
+    backgroundColor: "#16a34a",
+  },
+  geoDotMissing: {
+    backgroundColor: "#dc2626",
   },
 });

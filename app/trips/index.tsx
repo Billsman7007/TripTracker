@@ -1,41 +1,55 @@
-import { View, Text, StyleSheet, Pressable } from "react-native";
+import { useState, useEffect, useCallback } from "react";
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, RefreshControl, ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-
-const DUMMY_TRIPS = [
-  {
-    id: "1092",
-    status: "In Progress",
-    stops: 5,
-    completed: 2,
-    origin: "Home Terminal",
-    destination: "XYZ Distribution",
-    date: "Feb 4–7, 2026",
-  },
-  {
-    id: "1091",
-    status: "Completed",
-    stops: 3,
-    completed: 3,
-    origin: "Chicago Terminal",
-    destination: "Atlanta Hub",
-    date: "Jan 28–30, 2026",
-  },
-  {
-    id: "1090",
-    status: "Completed",
-    stops: 4,
-    completed: 4,
-    origin: "Dallas Yard",
-    destination: "Miami Depot",
-    date: "Jan 22–25, 2026",
-  },
-];
+import { fetchAllTrips, TripListItem } from "../../lib/trips";
 
 export default function TripsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const [trips, setTrips] = useState<TripListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function loadTrips() {
+    try {
+      const data = await fetchAllTrips();
+      setTrips(data);
+    } catch (error: any) {
+      console.error("[Trips] Error loading trips:", error);
+      setTrips([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTrips();
+  }, []);
+
+  // Reload when screen comes into focus (e.g. after creating a new trip)
+  useFocusEffect(
+    useCallback(() => {
+      loadTrips();
+      return () => {};
+    }, [])
+  );
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadTrips();
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
+        <ActivityIndicator size="large" color="#2563eb" />
+        <Text style={styles.loadingText}>Loading trips...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -49,43 +63,61 @@ export default function TripsScreen() {
       </View>
 
       {/* Trip List */}
-      <View style={styles.list}>
-        {DUMMY_TRIPS.map((trip) => (
-          <Pressable
-            key={trip.id}
-            style={({ pressed }) => [styles.tripCard, pressed && styles.tripCardPressed]}
-            onPress={() => router.push(`/trips/${trip.id}`)}
-          >
-            <View style={styles.tripCardLeft}>
-              <View style={styles.tripIdRow}>
-                <Text style={styles.tripId}>#{trip.id}</Text>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    trip.status === "Completed" ? styles.statusCompleted : styles.statusActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.statusText,
-                      trip.status === "Completed" ? styles.statusTextCompleted : styles.statusTextActive,
-                    ]}
-                  >
-                    {trip.status}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+      >
+        {trips.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="map-outline" size={48} color="#d1d5db" />
+            <Text style={styles.emptyTitle}>No trips yet</Text>
+            <Text style={styles.emptyText}>
+              Create your first trip from the home screen
+            </Text>
+          </View>
+        ) : (
+          <>
+            {trips.map((trip) => (
+              <Pressable
+                key={trip.id}
+                style={({ pressed }) => [styles.tripCard, pressed && styles.tripCardPressed]}
+                onPress={() => router.push(`/trips/${trip.id}`)}
+              >
+                <View style={styles.tripCardLeft}>
+                  <View style={styles.tripIdRow}>
+                    <Text style={styles.tripId}>#{trip.tripReference}</Text>
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        trip.status === "Completed" ? styles.statusCompleted : styles.statusActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.statusText,
+                          trip.status === "Completed" ? styles.statusTextCompleted : styles.statusTextActive,
+                        ]}
+                      >
+                        {trip.status}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.tripRoute}>
+                    {trip.origin} → {trip.destination}
+                  </Text>
+                  <Text style={styles.tripMeta}>
+                    {trip.date} · {trip.completed}/{trip.stops} stops
                   </Text>
                 </View>
-              </View>
-              <Text style={styles.tripRoute}>
-                {trip.origin} → {trip.destination}
-              </Text>
-              <Text style={styles.tripMeta}>
-                {trip.date} · {trip.completed}/{trip.stops} stops
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
-          </Pressable>
-        ))}
-      </View>
+                <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+              </Pressable>
+            ))}
+          </>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -116,9 +148,41 @@ const styles = StyleSheet.create({
   placeholder: {
     width: 24,
   },
+  scrollView: {
+    flex: 1,
+  },
   list: {
     padding: 12,
     gap: 6,
+    flexGrow: 1,
+  },
+  centered: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: "#6b7280",
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#374151",
+    marginTop: 16,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: "#9ca3af",
+    marginTop: 4,
+    textAlign: "center",
   },
   tripCard: {
     backgroundColor: "#ffffff",
